@@ -24,7 +24,9 @@ const saveUser = async (req, res) => {
     const cleanName = name.trim().toLowerCase();
 
     // ✅ Idempotency
-    const existingUser = await User.findOne({ name: cleanName }).select("-_id -__v");
+    const existingUser = await User.findOne({ name: cleanName }).select(
+      "-_id -__v",
+    );
     if (existingUser) {
       return res.status(200).json({
         status: "success",
@@ -39,16 +41,16 @@ const saveUser = async (req, res) => {
 
     let processedData = processData(genderData, ageData, nationData);
 
-    processedData.id = uuidv7();
-    processedData.name = cleanName;
-    processedData.created_at = new Date().toISOString();
-
     if (processedData.error) {
       return res.status(502).json({
         status: "error",
         message: processedData.error,
       });
     }
+
+    processedData.id = uuidv7();
+    processedData.name = cleanName;
+    processedData.created_at = new Date().toISOString();
 
     const user = await User.create(processedData);
 
@@ -61,9 +63,9 @@ const saveUser = async (req, res) => {
       data: userObj,
     });
   } catch (error) {
-    return res.status(502).json({
+    return res.status(500).json({
       status: "error",
-      message: "Failed to fetch data from upstream service",
+      message: "Server error",
     });
   }
 };
@@ -74,7 +76,10 @@ const getProfile = async (req, res) => {
 
     const profile = await User.findOne({ id: id }).select("-__v  -_id");
     if (!profile) {
-      throw new Error("Profile doesn't exist");
+      return res.status(404).json({
+        status: "error",
+        message: "Profile not found",
+      });
     }
 
     return res.status(200).json({
@@ -82,9 +87,9 @@ const getProfile = async (req, res) => {
       data: profile,
     });
   } catch (error) {
-    return res.status(502).json({
+    return res.status(500).json({
       status: "error",
-      message: "Failed to fetch data from upstream service",
+      message: "Server error",
     });
   }
 };
@@ -95,13 +100,13 @@ const getProfiles = async (req, res) => {
 
     const filter = {};
     if (gender) {
-      filter.gender = gender;
+      filter.gender = gender.toLowerCase();
     }
     if (country_id) {
-      filter.country_id = country_id;
+      filter.country_id = country_id.toLowerCase();
     }
     if (age_group) {
-      filter.age_group = age_group;
+      filter.age_group = age_group.toLowerCase();
     }
 
     const profiles = await User.find(filter)
@@ -113,9 +118,9 @@ const getProfiles = async (req, res) => {
       .status(200)
       .json({ status: "success", count: profiles.length, data: profiles });
   } catch (error) {
-    return res.status(502).json({
+    return res.status(500).json({
       status: "error",
-      message: "Failed to fetch data from upstream service",
+      message: "Server error",
     });
   }
 };
