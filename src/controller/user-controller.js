@@ -1,151 +1,117 @@
 import User from "../model/user.js";
-import { getAge, getGender, getNation } from "../service/index.js";
-import { processData } from "../utils/processData.js";
-import { v7 as uuidv7 } from "uuid";
-
-const saveUser = async (req, res) => {
-  try {
-    const { name } = req.body;
-
-    if (!name || String(name).trim() === "") {
-      return res.status(400).json({
-        status: "error",
-        message: "Missing or empty name parameter",
-      });
-    }
-
-    if (Array.isArray(name) || typeof name !== "string") {
-      return res.status(422).json({
-        status: "error",
-        message: "Invalid type for name",
-      });
-    }
-
-    const cleanName = name.trim().toLowerCase();
-
-    // ✅ Idempotency
-    const existingUser = await User.findOne({ name: cleanName }).select(
-      "-_id -__v",
-    );
-    if (existingUser) {
-      return res.status(200).json({
-        status: "success",
-        message: "Profile already exists",
-        data: existingUser,
-      });
-    }
-
-    const genderData = await getGender(cleanName);
-    const ageData = await getAge(cleanName);
-    const nationData = await getNation(cleanName);
-
-    let processedData = processData(genderData, ageData, nationData);
-
-    if (processedData.error) {
-      return res.status(502).json({
-        status: "error",
-        message: processedData.error,
-      });
-    }
-
-    processedData.id = uuidv7();
-    processedData.name = cleanName;
-    processedData.created_at = new Date().toISOString();
-
-    const user = await User.create(processedData);
-
-    const userObj = user.toObject();
-    delete userObj._id;
-    delete userObj.__v;
-
-    return res.status(201).json({
-      status: "success",
-      data: userObj,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      status: "error",
-      message: "Server error",
-    });
-  }
-};
-
-const getProfile = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const profile = await User.findOne({ id: id }).select("-__v  -_id");
-    if (!profile) {
-      return res.status(404).json({
-        status: "error",
-        message: "Profile not found",
-      });
-    }
-
-    return res.status(200).json({
-      status: "success",
-      data: profile,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      status: "error",
-      message: "Server error",
-    });
-  }
-};
+import runProfileQuery from '../service/profile-query.js'
+import {getPagination, parseSearch, buildMatch, buildSort} from "../utils/index.js"
 
 const getProfiles = async (req, res) => {
   try {
-    const { gender, country_id, age_group } = req.query;
+    const {
+      gender,
+      country_id,
+      age_group,
+      min_age,
+      max_age,
+      min_gender_probability,
+      min_country_probability,
+      sort_by,
+      order,
+      page,
+      limit,
+    } = req.query;
 
-    const filter = {};
-    if (gender) {
-      filter.gender = gender.toLowerCase();
-    }
-    if (country_id) {
-      filter.country_id = country_id.toLowerCase();
-    }
-    if (age_group) {
-      filter.age_group = age_group.toLowerCase();
-    }
+    const filters = {
+      gender: gender?.toLowerCase(),
+      country_id: country_id?.toUpperCase(),
+      age_group: age_group?.toLowerCase(),
+      min_age: min_age ? Number(min_age) : undefined,
+      max_age: max_age ? Number(max_age) : undefined,
+      min_gender_probability: min_gender_probability
+        ? Number(min_gender_probability)
+        : undefined,
+      min_country_probability: min_country_probability
+        ? Number(min_country_probability)
+        : undefined,
+    };
 
-    const profiles = await User.find(filter)
-      .select("id name gender age age_group country_id -_id")
-      .sort({ name: 1 })
-      .collation({ locale: "en", strength: 2 });
-
-    return res
-      .status(200)
-      .json({ status: "success", count: profiles.length, data: profiles });
-  } catch (error) {
-    return res.status(500).json({
-      status: "error",
-      message: "Server error",
+    const result = await runProfileQuery({
+      User,
+      filters,
+      sort_by,
+      order,
+      page,
+      limit,
     });
-  }
-};
 
-const deleteProfile = async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const profile = await User.findOne({ id });
-
-    if (!profile) {
-      return res.status(404).json({
+    return res.status(200).json({
+      status: "success",
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      data: result.data,
+    });
+  } catch (error) {
+    if (error.message === "INVALID_QUERY") {
+      return res.status(422).json({
         status: "error",
-        message: "Profile not found",
+        message: "Invalid query parameters",
       });
     }
 
-    await User.findOneAndDelete({ id });
-
-    return res.status(204).send();
-  } catch (error) {
     return res.status(500).json({
       status: "error",
       message: "Server error",
     });
   }
 };
-export { saveUser, getProfile, getProfiles, deleteProfile };
+
+const searchProfiles = async (req, res) => {
+  try {
+    const { q, sort_by, order, page, limit } = req.query;
+
+    if (!q) {
+      return res.status(400).json({
+        status: "error",
+        message: "Missing search query",
+      });
+    }
+
+    const filters = parseSearch(q);
+
+    if (Object.keys(filters).length === 0) {
+      return res.status(400).json({
+        status: "error",
+        message: "Unable to interpret query",
+      });
+    }
+
+    const result = await runProfileQuery({
+      User,
+      filters,
+      sort_by,
+      order,
+      page,
+      limit,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      page: result.page,
+      limit: result.limit,
+      total: result.total,
+      data: result.data,
+    });
+  } catch (error) {
+    if (error.message === "INVALID_QUERY") {
+      return res.status(422).json({
+        status: "error",
+        message: "Invalid query parameters",
+      });
+    }
+
+    return res.status(500).json({
+      status: "error",
+      message: "Server error",
+    });
+  }
+};
+
+export {  getProfiles, searchProfiles };
